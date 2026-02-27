@@ -1,0 +1,9 @@
+# macOS
+.DS_Store
+
+# Backup files
+*.bak
+*~
+
+# Local configs (not tracked)
+*.local
