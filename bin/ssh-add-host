@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # SSH Server Add Tool - Auto-configure passwordless login
-# Usage: ssh-add-host [alias] [address] [username] [port]
+# Usage: ssh-add-host [alias] [username] [address] [port]
 
 set -e
 
@@ -331,8 +331,8 @@ main() {
 
     if [[ $# -ge 3 ]]; then
         HOST_ALIAS="$1"
-        HOSTNAME="$2"
-        USERNAME="$3"
+        USERNAME="$2"
+        HOSTNAME="$3"
         PORT="${4:-22}"
         IDENTITY="${5:-$SSH_DIR/id_ed25519}"
         AUTO_CONFIRM=true
@@ -340,8 +340,8 @@ main() {
         AUTO_CONFIRM=false
         echo -e "${YELLOW}Please enter server information:${NC}"
         read -p "Host alias (e.g., myserver, ali-prod): " HOST_ALIAS
-        read -p "Server address (IP or hostname): " HOSTNAME
         read -p "Username: " USERNAME
+        read -p "Server address (IP or hostname): " HOSTNAME
         read -p "Port [22]: " PORT
         PORT=${PORT:-22}
         read -p "Identity file [~/.ssh/id_ed25519]: " IDENTITY
@@ -392,20 +392,20 @@ main() {
 # Show help
 show_help() {
     cat << 'EOF'
-Usage: ssh-add-host [alias] [address] [username] [port] [identity_file]
+Usage: ssh-add-host [alias] [username] [address] [port] [identity_file]
 
 Interactive mode:
     ssh-add-host
 
 Command line mode:
-    ssh-add-host myserver 192.168.1.100 root
-    ssh-add-host ali-prod 47.100.xxx.xxx ubuntu 22
-    ssh-add-host myserver example.com user 22 ~/.ssh/my_key
+    ssh-add-host myserver root 192.168.1.100
+    ssh-add-host ali-prod ubuntu 47.100.xxx.xxx 22
+    ssh-add-host myserver user example.com 22 ~/.ssh/my_key
 
 Arguments:
     alias         Host alias in SSH config
-    address       Server IP or hostname
     username      Login username
+    address       Server IP or hostname
     port          SSH port (default: 22)
     identity_file Private key path (default: ~/.ssh/id_ed25519)
 
