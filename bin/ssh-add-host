@@ -242,6 +242,7 @@ copy_key_to_server() {
     local port="${3:-22}"
     local key_file="${4:-$SSH_DIR/id_ed25519}"
 
+    key_file="${key_file/#\~/$HOME}"
     local pub_key_file="${key_file}.pub"
 
     if [[ ! -f "$pub_key_file" ]]; then
@@ -252,7 +253,7 @@ copy_key_to_server() {
     echo -e "${BLUE}Copying public key to server...${NC}"
     echo -e "${YELLOW}First login requires server password${NC}"
 
-    if ! ssh -o ConnectTimeout=10 -o BatchMode=no -p "$port" "$user@$hostname" "echo 'password auth ok'" &>/dev/null; then
+    if ! ssh -o ConnectTimeout=10 -o BatchMode=no -o StrictHostKeyChecking=accept-new -p "$port" "$user@$hostname" "echo 'password auth ok'" &>/dev/null; then
         echo -e "${YELLOW}Cannot connect with password, you may need to manually add the public key${NC}"
         echo -e "${CYAN}Please manually copy this public key to server's ~/.ssh/authorized_keys:${NC}"
         cat "$pub_key_file"
