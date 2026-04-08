@@ -65,7 +65,7 @@ find_host_in_config() {
     total_lines=$(wc -l < "$CONFIG_FILE")
 
     while IFS= read -r line; do
-        ((line_num++))
+        line_num=$((line_num + 1))
         if [[ "$line" =~ ^Host[[:space:]]+(.+)$ ]]; then
             local hosts="${BASH_REMATCH[1]}"
             for h in $hosts; do
@@ -83,9 +83,9 @@ find_host_in_config() {
     fi
 
     end_line=$total_lines
-    line_num=$start_line
+    line_num=0
     while IFS= read -r line; do
-        ((line_num++))
+        line_num=$((line_num + 1))
         if [[ $line_num -le $start_line ]]; then
             continue
         fi
@@ -269,7 +269,7 @@ copy_key_to_server() {
     local pub_key
     pub_key=$(cat "$pub_key_file")
 
-    if ssh -p "$port" "$user@$hostname" "mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo '$pub_key' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys" 2>/dev/null; then
+    if echo "$pub_key" | ssh -p "$port" "$user@$hostname" "mkdir -p ~/.ssh && chmod 700 ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys" 2>/dev/null; then
         echo -e "${GREEN}✓ Public key manually added to server${NC}"
         return 0
     fi
@@ -299,7 +299,7 @@ test_connection() {
             echo -e "${GREEN}================================${NC}"
             return 0
         fi
-        ((attempt++))
+        attempt=$((attempt + 1))
         sleep 1
     done
 
@@ -318,7 +318,7 @@ show_summary() {
     echo ""
     echo -e "${BLUE}=== Configuration Summary ===${NC}"
     echo -e "  Host Alias: ${CYAN}$HOST_ALIAS${NC}"
-    echo -e "  Server Address: ${CYAN}$HOSTNAME${NC}"
+    echo -e "  Server Address: ${CYAN}$SERVER_HOST${NC}"
     echo -e "  Username: ${CYAN}$USERNAME${NC}"
     echo -e "  Port: ${CYAN}${PORT:-22}${NC}"
     echo -e "  Identity File: ${CYAN}${IDENTITY:-$SSH_DIR/id_ed25519}${NC}"
@@ -333,7 +333,7 @@ main() {
     if [[ $# -ge 3 ]]; then
         HOST_ALIAS="$1"
         USERNAME="$2"
-        HOSTNAME="$3"
+        SERVER_HOST="$3"
         PORT="${4:-22}"
         IDENTITY="${5:-$SSH_DIR/id_ed25519}"
         AUTO_CONFIRM=true
@@ -342,14 +342,14 @@ main() {
         echo -e "${YELLOW}Please enter server information:${NC}"
         read -p "Host alias (e.g., myserver, ali-prod): " HOST_ALIAS
         read -p "Username: " USERNAME
-        read -p "Server address (IP or hostname): " HOSTNAME
+        read -p "Server address (IP or hostname): " SERVER_HOST
         read -p "Port [22]: " PORT
         PORT=${PORT:-22}
         read -p "Identity file [~/.ssh/id_ed25519]: " IDENTITY
         IDENTITY=${IDENTITY:-$SSH_DIR/id_ed25519}
     fi
 
-    if [[ -z "$HOST_ALIAS" || -z "$HOSTNAME" || -z "$USERNAME" ]]; then
+    if [[ -z "$HOST_ALIAS" || -z "$SERVER_HOST" || -z "$USERNAME" ]]; then
         echo -e "${RED}Error: Host alias, server address, and username are required${NC}"
         exit 1
     fi
@@ -370,13 +370,13 @@ main() {
     check_and_generate_key
 
     echo ""
-    add_to_config "$HOST_ALIAS" "$HOSTNAME" "$USERNAME" "$PORT" "$IDENTITY"
+    add_to_config "$HOST_ALIAS" "$SERVER_HOST" "$USERNAME" "$PORT" "$IDENTITY"
 
     echo ""
     test_config_parsing "$HOST_ALIAS"
 
     echo ""
-    if ! copy_key_to_server "$USERNAME" "$HOSTNAME" "$PORT" "$IDENTITY"; then
+    if ! copy_key_to_server "$USERNAME" "$SERVER_HOST" "$PORT" "$IDENTITY"; then
         echo ""
         echo -e "${RED}================================${NC}"
         echo -e "${RED}  Setup Failed${NC}"

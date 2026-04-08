@@ -1,0 +1,33 @@
+#!/bin/bash
+
+S=~/.claude/settings.json
+
+if [[ ! -f "$S" ]]; then
+  mkdir -p "$(dirname "$S")"
+  echo '{}' > "$S"
+fi
+
+case ${1:-} in
+  gpt)
+    jq '.env.ANTHROPIC_MODEL = "2049/gpt-5.4"
+      | .env.ANTHROPIC_DEFAULT_OPUS_MODEL = "2049/gpt-5.4(high)"
+      | .env.ANTHROPIC_DEFAULT_SONNET_MODEL = "2049/gpt-5.4(medium)"
+      | .env.ANTHROPIC_DEFAULT_HAIKU_MODEL = "2049/gpt-5.4(low)"
+      | .env.ANTHROPIC_SMALL_FAST_MODEL = "2049/gpt-5.4(low)"' \
+      "$S" > /tmp/.cc_tmp && mv /tmp/.cc_tmp "$S"
+    echo "已切换到 GPT-5.4"
+    ;;
+  claude)
+    jq '.env.ANTHROPIC_MODEL = "2049/claude-opus-4-6"
+      | .env.ANTHROPIC_DEFAULT_OPUS_MODEL = "2049/claude-opus-4-6"
+      | .env.ANTHROPIC_DEFAULT_SONNET_MODEL = "2049/claude-sonnet-4-6"
+      | .env.ANTHROPIC_DEFAULT_HAIKU_MODEL = "2049/claude-haiku-4-5-20251001"
+      | .env.ANTHROPIC_SMALL_FAST_MODEL = "2049/claude-haiku-4-5-20251001"' \
+      "$S" > /tmp/.cc_tmp && mv /tmp/.cc_tmp "$S"
+    echo "已切换到 Claude"
+    ;;
+  *)
+    echo "用法: cc-model [gpt|claude]"
+    echo "当前: $(jq -r '.env.ANTHROPIC_MODEL // "未设置"' "$S")"
+    ;;
+esac
