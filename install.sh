@@ -32,5 +32,37 @@ if [[ -d "$SCRIPT_DIR/bin" ]]; then
     done
 fi
 
+# Link shell aliases
+if [[ -f "$SCRIPT_DIR/aliases" ]]; then
+    echo ""
+    echo "Installing shell aliases..."
+
+    ALIASES_SOURCE="$SCRIPT_DIR/aliases"
+    ALIASES_TARGET="$HOME/.aliases"
+    CURRENT_TARGET=""
+
+    if [[ -L "$ALIASES_TARGET" ]]; then
+        CURRENT_TARGET="$(readlink "$ALIASES_TARGET")"
+    fi
+
+    if [[ -e "$ALIASES_TARGET" || -L "$ALIASES_TARGET" ]] && [[ "$CURRENT_TARGET" != "$ALIASES_SOURCE" ]]; then
+        BACKUP_TARGET="$ALIASES_TARGET.backup.$(date +%Y%m%d%H%M%S)"
+        mv "$ALIASES_TARGET" "$BACKUP_TARGET"
+        echo -e "  ${GREEN}✓${NC} backed up existing ~/.aliases to $(basename "$BACKUP_TARGET")"
+    fi
+
+    ln -sf "$ALIASES_SOURCE" "$ALIASES_TARGET"
+    echo -e "  ${GREEN}✓${NC} ~/.aliases"
+
+    # Ensure shell rc files source ~/.aliases
+    SOURCE_LINE='[ -f "$HOME/.aliases" ] && . "$HOME/.aliases"'
+    for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
+        if [[ -f "$rc" ]] && ! grep -Fq "$SOURCE_LINE" "$rc"; then
+            printf '\n# Load shared aliases from dotfiles\n%s\n' "$SOURCE_LINE" >> "$rc"
+            echo -e "  ${GREEN}✓${NC} sourced in $(basename "$rc")"
+        fi
+    done
+fi
+
 echo ""
 echo -e "${GREEN}Done!${NC}"

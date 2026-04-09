@@ -1,0 +1,5 @@
+# Shared aliases (synced via dotfiles)
+
+alias cc="claude"
+alias ccd="claude --dangerously-skip-permissions"
+alias ccc="claude -c"
