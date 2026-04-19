@@ -1,7 +1,4 @@
 # Shared aliases (synced via dotfiles)
 
-alias cc="claude"
 alias ccd="claude --dangerously-skip-permissions"
-alias ccc="claude -c"
-alias ccp="claude -p"
 alias codex="codex --ask-for-approval never --sandbox danger-full-access"
