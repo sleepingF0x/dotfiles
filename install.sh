@@ -64,5 +64,33 @@ if [[ -f "$SCRIPT_DIR/aliases" ]]; then
     done
 fi
 
+# Ensure secrets env file exists and is sourced
+ENV_DIR="$HOME/.config/secrets"
+ENV_TARGET="$ENV_DIR/env.sh"
+ENV_SOURCE_LINE='[ -f "$HOME/.config/secrets/env.sh" ] && . "$HOME/.config/secrets/env.sh"'
+
+
+echo ""
+echo "Installing secrets env..."
+mkdir -p "$ENV_DIR"
+
+if [[ -f "$ENV_TARGET" ]]; then
+    echo -e "  ${GREEN}✓${NC} ~/.config/secrets/env.sh already exists"
+else
+    : > "$ENV_TARGET"
+    echo -e "  ${GREEN}✓${NC} created ~/.config/secrets/env.sh"
+fi
+
+for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
+    if [[ -f "$rc" ]]; then
+        if grep -Fq "$ENV_SOURCE_LINE" "$rc"; then
+            echo -e "  ${GREEN}✓${NC} env.sh already sourced in $(basename "$rc")"
+        else
+            printf '\n# Load secrets environment\n%s\n' "$ENV_SOURCE_LINE" >> "$rc"
+            echo -e "  ${GREEN}✓${NC} sourced env.sh in $(basename "$rc")"
+        fi
+    fi
+done
+
 echo ""
 echo -e "${GREEN}Done!${NC}"
