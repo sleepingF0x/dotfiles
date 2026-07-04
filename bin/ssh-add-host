@@ -251,21 +251,18 @@ copy_key_to_server() {
     fi
 
     echo -e "${BLUE}Copying public key to server...${NC}"
-    echo -e "${YELLOW}First login requires server password${NC}"
+    echo -e "${YELLOW}You may be prompted once for the server password${NC}"
 
-    if ! ssh -o ConnectTimeout=10 -o BatchMode=no -o StrictHostKeyChecking=accept-new -p "$port" "$user@$hostname" "echo 'password auth ok'" &>/dev/null; then
-        echo -e "${YELLOW}Cannot connect with password, you may need to manually add the public key${NC}"
-        echo -e "${CYAN}Please manually copy this public key to server's ~/.ssh/authorized_keys:${NC}"
-        cat "$pub_key_file"
-        return 1
+    if command -v ssh-copy-id &>/dev/null; then
+        if ssh-copy-id -i "$key_file" -p "$port" "$user@$hostname"; then
+            echo -e "${GREEN}✓ Public key copied to server${NC}"
+            return 0
+        fi
+        echo -e "${YELLOW}ssh-copy-id failed, trying manual add...${NC}"
+    else
+        echo -e "${YELLOW}ssh-copy-id not found, trying manual add...${NC}"
     fi
 
-    if ssh-copy-id -i "$key_file" -p "$port" "$user@$hostname" 2>/dev/null; then
-        echo -e "${GREEN}✓ Public key copied to server${NC}"
-        return 0
-    fi
-
-    echo -e "${YELLOW}ssh-copy-id failed, trying manual add...${NC}"
     local pub_key
     pub_key=$(cat "$pub_key_file")
 
@@ -340,7 +337,7 @@ main() {
     else
         AUTO_CONFIRM=false
         echo -e "${YELLOW}Please enter server information:${NC}"
-        read -p "Host alias (e.g., myserver, ali-prod): " HOST_ALIAS
+        read -p "Host alias (e.g., myserver): " HOST_ALIAS
         read -p "Username: " USERNAME
         read -p "Server address (IP or hostname): " SERVER_HOST
         read -p "Port [22]: " PORT
@@ -400,7 +397,7 @@ Interactive mode:
 
 Command line mode:
     ssh-add-host myserver root 192.168.1.100
-    ssh-add-host ali-prod ubuntu 47.100.xxx.xxx 22
+    ssh-add-host prod-server ubuntu example.com 22
     ssh-add-host myserver user example.com 22 ~/.ssh/my_key
 
 Arguments:
