@@ -69,6 +69,23 @@ The installer also appends this source line to `~/.zshrc` and `~/.bashrc` if mis
 [ -f "$HOME/.aliases" ] && . "$HOME/.aliases"
 ```
 
+### Secrets Environment
+
+The installer creates `~/.config/secrets/env.sh` if it does not already exist, then appends this source line to `~/.zshrc` and `~/.bashrc` if missing:
+
+```sh
+[ -f "$HOME/.config/secrets/env.sh" ] && . "$HOME/.config/secrets/env.sh"
+```
+
+`env.sh` loads readable sibling `*.env` files in sorted order and automatically exports their variables. Keep each file shell-compatible:
+
+```sh
+OPENAI_API_KEY=...
+PROJECT_NAME="value with spaces"
+```
+
+If a later `.env` file sets the same variable to a different value, `env.sh` prints a warning with the variable name and file names, without printing either secret value. The later file still wins.
+
 ### Adding New Config Categories
 
 ```bash
@@ -85,7 +102,7 @@ dotfiles/
 ├── aliases                 # Shared shell aliases
 ├── bin/                    # Executable scripts
 │   └── ssh-add-host
-├── install.sh              # Installer for scripts and aliases
+├── install.sh              # Installer for scripts, aliases, and secrets env
 └── README.md
 ```
 
