@@ -1,6 +1,13 @@
 # dotfiles
 
-Personal dotfiles and scripts managed with [GNU Stow](https://www.gnu.org/software/stow/).
+Personal dotfiles and scripts. `./install.sh` does the whole install; there is no other dependency.
+
+**This repository is public.** Nothing secret is in it, and nothing secret may be added to it. What gets synced is *names* and *mechanisms* — never values and never hosts:
+
+| Synced through git | Stays on the machine |
+|--------------------|----------------------|
+| Secret variable *names* (`secrets.env.example`) | Secret values (`~/.config/secrets/*.env`) |
+| Machine-agnostic ssh defaults (`ssh/agent.conf`) | Host entries, IPs, usernames (`~/.ssh/config`) |
 
 ## What's Inside
 
@@ -21,39 +28,25 @@ Personal dotfiles and scripts managed with [GNU Stow](https://www.gnu.org/softwa
 
 ## Installation
 
-### Prerequisites
-
 ```bash
-# macOS
-brew install stow
-
-# Ubuntu/Debian
-sudo apt install stow
-
-# Fedora
-sudo dnf install stow
-```
-
-### Setup
-
-```bash
-# Clone this repository
-git clone https://github.com/yourusername/dotfiles.git ~/Projects/dotfiles
+git clone https://github.com/sleepingF0x/dotfiles.git ~/Projects/dotfiles
 cd ~/Projects/dotfiles
-
-# Install scripts via stow
-stow bin -t ~/.local/bin
-
-# Or use the install script to install scripts + shared aliases
 ./install.sh
 ```
+
+`install.sh` is idempotent — re-run it any time. It symlinks `bin/` scripts into `~/.local/bin`, symlinks `aliases` to `~/.aliases`, writes the shared ssh block into `~/.ssh/config`, sets up the secrets loader, and adds the source lines to `~/.zshrc` / `~/.bashrc` if they are missing.
+
+Then **open a new shell** — an install script runs in a child process and cannot change the environment of the shell that launched it.
+
+On a fresh machine it will also list any secret variable that still has no value. Fill those in at `~/.config/secrets/secrets.env`.
 
 ### Uninstall
 
 ```bash
-# Remove symlinks (preserves the repo)
-stow -D bin -t ~/.local/bin
+rm ~/.aliases ~/.local/bin/ssh-add-host
 ```
+
+Then drop the `. "$HOME/.aliases"` and `. "$HOME/.config/secrets/env.sh"` lines from your shell rc, and delete the `# >>> dotfiles ssh-agent >>>` block from `~/.ssh/config`.
 
 ## Usage
 
@@ -61,7 +54,7 @@ stow -D bin -t ~/.local/bin
 
 1. Add your script to `bin/`
 2. Make it executable: `chmod +x bin/your-script`
-3. Re-run stow: `stow -R bin -t ~/.local/bin`
+3. Re-run `./install.sh`
 
 ### Shared Aliases
 
@@ -77,7 +70,7 @@ The installer also appends this source line to `~/.zshrc` and `~/.bashrc` if mis
 
 `ssh/agent.conf` holds the machine-agnostic half of an ssh config — currently just the `Host *` block that makes a passphrase-protected key affordable. **Host entries never go here.** `HostName`, `User`, `Port` and IPs are reconnaissance data, and this repo is public; they stay in `~/.ssh/config`, which is not tracked.
 
-`./install.sh` writes the block into `~/.ssh/config` between markers:
+`./install.sh` appends the block to the end of `~/.ssh/config`, between markers:
 
 ```sshconfig
 # >>> dotfiles ssh-agent >>>
@@ -90,9 +83,10 @@ Host *
 
 Edit `ssh/agent.conf` and re-run `./install.sh` to update every machine — the marked region is replaced in place. `bin/ssh-add-host` writes the same block (it owns the implementation; `install.sh` calls `ssh-add-host ensure-agent-config`), so a standalone copy of the script still works without this repo.
 
-Two design points worth knowing, both of them the result of testing rather than taste:
+Three design points worth knowing, all of them the result of testing rather than taste. The first two follow from the same fact: **ssh_config has no block terminators**, so a directive belongs to the most recent `Host` block above it, whether or not that was intended.
 
-- **It is a literal `Host *` block, not an `Include`.** ssh_config has no block terminators, so an `Include` inherits the scope of whatever `Host` block precedes it. The day another tool (VS Code Remote, OrbStack, …) prepends a block to `~/.ssh/config`, an `Include` below it silently applies to that one host and nothing else. A `Host *` block starts its own scope and reaches every host from anywhere in the file.
+- **It is a literal `Host *` block, not an `Include`.** An `Include` inherits the scope of whatever `Host` block precedes it. The day another tool (VS Code Remote, OrbStack, …) prepends a block to `~/.ssh/config`, an `Include` below it silently applies to that one host and nothing else. A `Host *` block starts its own scope, so it reaches every host from anywhere in the file.
+- **It is appended, not prepended.** By the same rule, a block at the *top* of the file swallows every top-level directive below it into its scope. Real configs have those — OrbStack's own `Include` carries the comment *"This only works if it's at the top of ssh_config (before any Host blocks)"*. Since a `Host *` block works from anywhere, going first buys nothing and risks that. Appending also lets a per-host setting override these defaults, which is the right way round.
 - **An unmarked `AddKeysToAgent` is left alone.** If you wrote a block by hand, the installer declines and says so rather than guessing where your block ends — that guess is how a tool eats half of someone's ssh config.
 
 After editing, the config is verified with `ssh -G`; if ssh rejects it, the previous version is restored.
@@ -122,14 +116,16 @@ Secret **values** never enter this repo. Only their **names** do, via `secrets.e
 
 An older hand-written `env.sh` holding secrets inline is detected on upgrade: the installer backs it up and migrates its variables into `secrets.env` before replacing it with the loader.
 
-### Adding New Config Categories
+### Adding a New Config
 
-```bash
-# Example: Add zsh configs
-mkdir zsh
-mv ~/.zshrc zsh/
-stow zsh -t ~
-```
+Before moving any file from `$HOME` into this repo, ask what is in it. A public repo will happily publish an API key sitting in a `.zshrc`, or a server list sitting in an `~/.ssh/config` — `.gitignore` cannot save you from a file you deliberately `git add`.
+
+The pattern used here splits every config in two:
+
+- The half that is the same on every machine goes in the repo (`aliases`, `ssh/agent.conf`).
+- The half that is a secret or identifies a host stays outside it, and only its *shape* is tracked (`secrets.env.example`).
+
+Follow that split and `install.sh` will reassemble the two on each machine.
 
 ## Directory Structure
 
