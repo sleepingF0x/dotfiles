@@ -2,3 +2,4 @@
 
 alias ccd="claude --dangerously-skip-permissions"
 alias codex="codex --ask-for-approval never --sandbox danger-full-access"
+alias grok="grok --always-approve"
