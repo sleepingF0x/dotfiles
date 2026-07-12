@@ -207,7 +207,23 @@ ensure_agent_config() {
 # to delete someone else's hosts whenever the boundary was computed wrong.
 HOSTS_DIR="$SSH_DIR/config.d"
 
+# An alias becomes a path: $HOSTS_DIR/<alias>.conf. Without this check,
+# `remove ../../foo` resolves outside config.d and deletes an arbitrary .conf
+# file — verified. Restricting to this set also keeps the alias safe to splice
+# into the grep regex in warn_if_host_in_main_config. A concrete host name lives
+# well inside [A-Za-z0-9._-]; anything else is either an attack or a Host pattern
+# that does not belong in a per-host file.
+validate_alias() {
+    local alias="$1"
+    if [[ -z "$alias" || "$alias" == *..* || ! "$alias" =~ ^[A-Za-z0-9._-]+$ ]]; then
+        echo -e "${RED}✗ Invalid host alias: '${alias}'${NC}" >&2
+        echo -e "${RED}  Allowed: letters, digits, dot, underscore, hyphen (no '/', no '..').${NC}" >&2
+        return 1
+    fi
+}
+
 host_conf_file() {
+    validate_alias "$1" || exit 1
     echo "$HOSTS_DIR/$1.conf"
 }
 
@@ -233,10 +249,13 @@ ensure_include() {
     local tmp
     tmp="$(mktemp)"
 
-    if grep -qE '^[[:space:]]*Include[[:space:]]+config\.d/' "$CONFIG_FILE"; then
-        # Upgrade an older glob (e.g. config.d/**/*.conf) in place.
+    # Only upgrade the one older glob this tool itself used to write. A user's own
+    # `Include config.d/work/*.conf` is theirs — rewriting it to config.d/*.conf
+    # silently changes which files ssh reads. If ours is missing we just add it;
+    # both includes can coexist.
+    if grep -qxF 'Include config.d/**/*.conf' "$CONFIG_FILE"; then
         awk -v line="$INCLUDE_LINE" \
-            '/^[[:space:]]*Include[[:space:]]+config\.d\// { print line; next } { print }' \
+            '$0 == "Include config.d/**/*.conf" { print line; next } { print }' \
             "$CONFIG_FILE" > "$tmp"
         echo -e "${GREEN}✓ Include glob updated in ~/.ssh/config${NC}"
     else
@@ -409,6 +428,21 @@ split_config() {
         return 0
     fi
 
+    # A host defined both in ~/.ssh/config AND already in config.d/<alias>.conf is
+    # a genuine conflict. Writing the block would clobber the existing file, and
+    # the rollback below would then delete a file this run did not create — data
+    # loss reported as "nothing was changed". Refuse before touching anything.
+    local h collisions=""
+    for h in $hosts; do
+        validate_alias "$h" || { echo -e "${RED}  Fix that alias in ~/.ssh/config by hand.${NC}"; return 1; }
+        [[ -f "$HOSTS_DIR/$h.conf" ]] && collisions="$collisions $h"
+    done
+    if [[ -n "$collisions" ]]; then
+        echo -e "${RED}✗ These hosts already have a file in $HOSTS_DIR/:${collisions}${NC}"
+        echo -e "${YELLOW}  They are defined in two places. Reconcile each by hand, then run split.${NC}"
+        return 1
+    fi
+
     echo -e "${BLUE}These hosts will move out of ~/.ssh/config into $HOSTS_DIR/:${NC}"
     echo "$hosts" | sed 's/^/  /'
     echo ""
@@ -501,9 +535,9 @@ split_config() {
     fi
 
     rm -rf "$snap"
+    rm -f "$backup"
     echo ""
     echo -e "${GREEN}✓ Split complete — every host resolves exactly as before${NC}"
-    echo -e "${CYAN}  Backup: $backup${NC}"
     for h in $hosts; do
         echo -e "  ${GREEN}✓${NC} $(host_conf_file "$h")"
     done
