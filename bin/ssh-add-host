@@ -168,12 +168,18 @@ ensure_agent_config() {
             awk -v e="$AGENT_END" 'found { print } $0 == e { found = 1 }' "$CONFIG_FILE"
         } > "$tmp"
     else
+        # Appended, not prepended. A `Host *` block reaches every host from
+        # anywhere in the file, so there is nothing to gain by going first — and
+        # plenty to lose: ssh_config has no block terminators, so a block at the
+        # top swallows every top-level directive below it into its scope. Real
+        # configs have those. OrbStack's own Include even documents that it "only
+        # works if it's at the top of ssh_config (before any Host blocks)".
         {
+            cat "$CONFIG_FILE"
+            echo ""
             echo "$AGENT_BEGIN"
             printf '%s\n' "$block"
             echo "$AGENT_END"
-            echo ""
-            cat "$CONFIG_FILE"
         } > "$tmp"
     fi
 
