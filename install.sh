@@ -73,6 +73,17 @@ if [[ -f "$SCRIPT_DIR/aliases" ]]; then
         '[ -f "$HOME/.aliases" ] && . "$HOME/.aliases"'
 fi
 
+# Shared ssh defaults
+#
+# Only the machine-agnostic block in ssh/agent.conf is tracked. Host entries stay
+# in ~/.ssh/config, which never enters this repo. bin/ssh-add-host owns the code
+# that writes the block, so there is one implementation rather than two.
+if [[ -f "$SCRIPT_DIR/ssh/agent.conf" && -x "$SCRIPT_DIR/bin/ssh-add-host" ]]; then
+    echo ""
+    echo "Installing ssh defaults..."
+    "$SCRIPT_DIR/bin/ssh-add-host" ensure-agent-config "$SCRIPT_DIR/ssh/agent.conf"
+fi
+
 # Secrets environment
 #
 # Secret VALUES never enter this repo. Only the variable names do, via

@@ -26,6 +26,11 @@ credentials
 authorized_keys
 known_hosts
 
+# ssh/ holds one public-safe file. Anything else dropped in here — a real
+# ~/.ssh/config, a host list — would publish server addresses and usernames.
+ssh/**
+!ssh/agent.conf
+
 # Local / machine-specific configs
 *.local
 .claude/settings.local.json

@@ -93,35 +93,103 @@ check_and_generate_key() {
     cat "${key_file}.pub"
 }
 
-# Make ssh hand keys to the agent automatically, so a passphrase-protected key
-# is unlocked once instead of on every connection. Prepended as a `Host *` block:
-# ssh takes the first value it finds for a keyword, and no per-host block below
-# sets these, so there is nothing to shadow.
-#   IgnoreUnknown  -> non-macOS ssh silently skips UseKeychain instead of erroring
-#   AddKeysToAgent -> works on macOS, Linux, WSL and Git Bash
-#   UseKeychain    -> macOS only: persists the passphrase across reboots
+AGENT_BEGIN="# >>> dotfiles ssh-agent >>>"
+AGENT_END="# <<< dotfiles ssh-agent <<<"
+
+# The canonical block lives in the repo at ssh/agent.conf. This script is
+# symlinked into ~/.local/bin, so resolve the symlink to find it. Used on its
+# own, with no repo around, it falls back to the copy below.
+repo_agent_conf() {
+    local src="${BASH_SOURCE[0]}" dir
+    while [[ -L "$src" ]]; do
+        dir="$(cd -P "$(dirname "$src")" && pwd)"
+        src="$(readlink "$src")"
+        [[ "$src" != /* ]] && src="$dir/$src"
+    done
+    dir="$(cd -P "$(dirname "$src")" && pwd)"
+    echo "$dir/../ssh/agent.conf"
+}
+
+embedded_agent_block() {
+    cat <<'EOF_BLOCK'
+Host *
+    IgnoreUnknown UseKeychain
+    AddKeysToAgent yes
+    UseKeychain yes
+EOF_BLOCK
+}
+
+# Make ssh hand keys to the agent, so a passphrase-protected key is unlocked once
+# instead of on every connection.
+#
+# This is written as a literal `Host *` block rather than an Include. ssh_config
+# has no block terminators, so an Include inherits the scope of whatever Host
+# block precedes it: the day another tool (VS Code Remote, OrbStack, ...) prepends
+# a block to ~/.ssh/config, an Include below it silently applies to that one host
+# only. A `Host *` block starts its own scope and reaches every host from anywhere
+# in the file.
 ensure_agent_config() {
+    local source_conf="${1:-$(repo_agent_conf)}"
+    local block
+
+    if [[ -r "$source_conf" ]]; then
+        block="$(cat "$source_conf")"
+    else
+        block="$(embedded_agent_block)"
+    fi
+
     touch "$CONFIG_FILE"
     chmod 600 "$CONFIG_FILE"
 
-    if grep -q "AddKeysToAgent" "$CONFIG_FILE"; then
+    # AddKeysToAgent set outside our markers means someone wrote a block by hand.
+    # Guessing its boundaries in order to replace it is how you delete half of
+    # somebody's ssh config, so leave it be and say why.
+    # Match the directive at the start of a line, not the word inside a comment.
+    if ! grep -Fq "$AGENT_BEGIN" "$CONFIG_FILE" && grep -qE '^[[:space:]]*AddKeysToAgent' "$CONFIG_FILE"; then
+        echo -e "${YELLOW}⚠ ~/.ssh/config already sets AddKeysToAgent outside the dotfiles markers${NC}"
+        echo -e "${YELLOW}  Leaving it untouched. Remove it by hand to let dotfiles manage the block.${NC}"
         return 0
     fi
 
-    local tmp
+    local backup tmp
+    backup="$CONFIG_FILE.agent-bak.$(date +%Y%m%d_%H%M%S)"
+    cp "$CONFIG_FILE" "$backup"
     tmp="$(mktemp)"
-    {
-        echo "Host *"
-        echo "    IgnoreUnknown UseKeychain"
-        echo "    AddKeysToAgent yes"
-        echo "    UseKeychain yes"
-        echo ""
-        cat "$CONFIG_FILE"
-    } > "$tmp"
+
+    if grep -Fq "$AGENT_BEGIN" "$CONFIG_FILE"; then
+        # Replace in place, so editing ssh/agent.conf and re-running updates it.
+        # The block is spliced with two awk passes rather than passed in via -v:
+        # awk -v cannot carry a value containing newlines.
+        {
+            awk -v b="$AGENT_BEGIN" '$0 == b { exit } { print }' "$CONFIG_FILE"
+            echo "$AGENT_BEGIN"
+            printf '%s\n' "$block"
+            echo "$AGENT_END"
+            awk -v e="$AGENT_END" 'found { print } $0 == e { found = 1 }' "$CONFIG_FILE"
+        } > "$tmp"
+    else
+        {
+            echo "$AGENT_BEGIN"
+            printf '%s\n' "$block"
+            echo "$AGENT_END"
+            echo ""
+            cat "$CONFIG_FILE"
+        } > "$tmp"
+    fi
 
     mv "$tmp" "$CONFIG_FILE"
     chmod 600 "$CONFIG_FILE"
-    echo -e "${GREEN}✓ ssh-agent settings added to ~/.ssh/config${NC}"
+
+    # A malformed config breaks every ssh on the machine, so prove it still parses.
+    if ! ssh -G localhost >/dev/null 2>&1; then
+        mv "$backup" "$CONFIG_FILE"
+        chmod 600 "$CONFIG_FILE"
+        echo -e "${RED}✗ ssh rejected the new config — restored the previous one${NC}"
+        return 1
+    fi
+
+    rm -f "$backup"
+    echo -e "${GREEN}✓ ssh-agent block in ~/.ssh/config${NC}"
 }
 
 # Find Host location in config file
@@ -499,6 +567,12 @@ case "${1:-}" in
     -h|--help|help)
         show_help
         exit 0
+        ;;
+    ensure-agent-config)
+        # Used by dotfiles/install.sh so the block is written by one implementation
+        # only. Optional second argument: path to the canonical ssh/agent.conf.
+        ensure_agent_config "${2:-}"
+        exit $?
         ;;
     *)
         main "$@"

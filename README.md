@@ -8,6 +8,7 @@ Personal dotfiles and scripts managed with [GNU Stow](https://www.gnu.org/softwa
 |-----------|----------|-----------------|
 | `bin/` | Custom shell scripts | `~/.local/bin/` |
 | `aliases` | Shared shell aliases | `~/.aliases` |
+| `ssh/agent.conf` | Shared ssh defaults (no host entries) | block inside `~/.ssh/config` |
 | `secrets.env.example` | Secret variable names (no values) | `~/.config/secrets/secrets.env` |
 
 ### Scripts
@@ -72,6 +73,30 @@ The installer also appends this source line to `~/.zshrc` and `~/.bashrc` if mis
 [ -f "$HOME/.aliases" ] && . "$HOME/.aliases"
 ```
 
+### Shared SSH Defaults
+
+`ssh/agent.conf` holds the machine-agnostic half of an ssh config — currently just the `Host *` block that makes a passphrase-protected key affordable. **Host entries never go here.** `HostName`, `User`, `Port` and IPs are reconnaissance data, and this repo is public; they stay in `~/.ssh/config`, which is not tracked.
+
+`./install.sh` writes the block into `~/.ssh/config` between markers:
+
+```sshconfig
+# >>> dotfiles ssh-agent >>>
+Host *
+    IgnoreUnknown UseKeychain
+    AddKeysToAgent yes
+    UseKeychain yes
+# <<< dotfiles ssh-agent <<<
+```
+
+Edit `ssh/agent.conf` and re-run `./install.sh` to update every machine — the marked region is replaced in place. `bin/ssh-add-host` writes the same block (it owns the implementation; `install.sh` calls `ssh-add-host ensure-agent-config`), so a standalone copy of the script still works without this repo.
+
+Two design points worth knowing, both of them the result of testing rather than taste:
+
+- **It is a literal `Host *` block, not an `Include`.** ssh_config has no block terminators, so an `Include` inherits the scope of whatever `Host` block precedes it. The day another tool (VS Code Remote, OrbStack, …) prepends a block to `~/.ssh/config`, an `Include` below it silently applies to that one host and nothing else. A `Host *` block starts its own scope and reaches every host from anywhere in the file.
+- **An unmarked `AddKeysToAgent` is left alone.** If you wrote a block by hand, the installer declines and says so rather than guessing where your block ends — that guess is how a tool eats half of someone's ssh config.
+
+After editing, the config is verified with `ssh -G`; if ssh rejects it, the previous version is restored.
+
 ### Secrets Environment
 
 Secret **values** never enter this repo. Only their **names** do, via `secrets.env.example`, so a new machine knows what it still has to fill in.
@@ -112,9 +137,11 @@ stow zsh -t ~
 dotfiles/
 ├── aliases                 # Shared shell aliases
 ├── secrets.env.example     # Secret variable NAMES (no values)
+├── ssh/
+│   └── agent.conf          # Shared ssh defaults (no host entries)
 ├── bin/                    # Executable scripts
 │   └── ssh-add-host
-├── install.sh              # Installer for scripts, aliases, and secrets env
+├── install.sh              # Installer for scripts, aliases, ssh defaults, secrets env
 └── README.md
 ```
 
