@@ -21,6 +21,13 @@ Personal dotfiles and scripts. `./install.sh` does the whole install; there is n
 ### Scripts
 
 - **ssh-add-host** - Automate SSH server setup with passwordless login
+
+  ```bash
+  ssh-add-host myserver ubuntu 203.0.113.10 22   # add (port defaults to 22)
+  ssh-add-host remove myserver                   # remove
+  ```
+
+  - Each host gets **its own file** at `~/.ssh/config.d/<alias>.conf`, pulled in by `Include config.d/*.conf` in `~/.ssh/config`. Adding, replacing and removing a server is then a file operation instead of line surgery on your whole ssh config.
   - Optional dependencies: `ssh-copy-id` (recommended) and `sshpass` for non-interactive password entry
   - Set `SSH_ADD_HOST_PASSWORD` (with `sshpass` installed) to provide the initial SSH password; otherwise enter it interactively
   - Generated keys are **passphrase-protected**. This costs no convenience: the tool adds `AddKeysToAgent yes` (plus `UseKeychain yes` on macOS, guarded by `IgnoreUnknown` so Linux/WSL/Git Bash ignore it) to `~/.ssh/config` and loads the key into `ssh-agent`, so the passphrase is typed once, not per connection.
@@ -68,7 +75,17 @@ The installer also appends this source line to `~/.zshrc` and `~/.bashrc` if mis
 
 ### Shared SSH Defaults
 
-`ssh/agent.conf` holds the machine-agnostic half of an ssh config — currently just the `Host *` block that makes a passphrase-protected key affordable. **Host entries never go here.** `HostName`, `User`, `Port` and IPs are reconnaissance data, and this repo is public; they stay in `~/.ssh/config`, which is not tracked.
+Your ssh config is split in two, along the line this whole repo is organised on:
+
+| Where | What | In git? |
+|-------|------|---------|
+| `ssh/agent.conf` | The `Host *` defaults, identical on every machine | Yes |
+| `~/.ssh/config.d/<alias>.conf` | One file per server — `HostName`, `User`, `Port` | **No** |
+| `~/.ssh/config` | The `Include`, plus the agent block written between markers | **No** |
+
+**Host entries never go in the repo.** `HostName`, `User`, `Port` and IPs are reconnaissance data, and this repo is public.
+
+A note on the `Include` glob, because it is easy to get wrong and fails silently. OpenSSH uses `glob(3)`, where `**` is **not** recursive — it is just two `*`, and `*` never crosses a `/`. So `config.d/*.conf` matches flat files, while `config.d/**/*.conf` matches only files exactly *one directory deep*. Point it at the wrong shape and every host vanishes with no error: ssh simply treats the alias as a literal hostname.
 
 `./install.sh` appends the block to the end of `~/.ssh/config`, between markers:
 

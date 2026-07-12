@@ -198,100 +198,82 @@ ensure_agent_config() {
     echo -e "${GREEN}✓ ssh-agent block in ~/.ssh/config${NC}"
 }
 
-# Find Host location in config file
-find_host_in_config() {
-    local host="$1"
-    local line_num=0
-    local start_line=0
-    local end_line=0
-    local total_lines=0
+# One file per host, so adding, replacing and removing a server is a file
+# operation. The code this replaces located a Host block by line number and ran
+# `sed '<start>,<end>d'` across the whole of ~/.ssh/config — a standing invitation
+# to delete someone else's hosts whenever the boundary was computed wrong.
+HOSTS_DIR="$SSH_DIR/config.d"
 
-    if [[ ! -f "$CONFIG_FILE" ]]; then
-        echo "NOT_FOUND"
-        return
-    fi
-
-    total_lines=$(wc -l < "$CONFIG_FILE")
-
-    while IFS= read -r line; do
-        line_num=$((line_num + 1))
-        if [[ "$line" =~ ^Host[[:space:]]+(.+)$ ]]; then
-            local hosts="${BASH_REMATCH[1]}"
-            for h in $hosts; do
-                if [[ "$h" == "$host" ]]; then
-                    start_line=$line_num
-                    break 2
-                fi
-            done
-        fi
-    done < "$CONFIG_FILE"
-
-    if [[ $start_line -eq 0 ]]; then
-        echo "NOT_FOUND"
-        return
-    fi
-
-    end_line=$total_lines
-    line_num=0
-    while IFS= read -r line; do
-        line_num=$((line_num + 1))
-        if [[ $line_num -le $start_line ]]; then
-            continue
-        fi
-        if [[ "$line" =~ ^Host[[:space:]] ]]; then
-            end_line=$((line_num - 1))
-            break
-        fi
-    done < "$CONFIG_FILE"
-
-    echo "${start_line},${end_line}"
+host_conf_file() {
+    echo "$HOSTS_DIR/$1.conf"
 }
 
-# Remove Host section from config
-remove_host_from_config() {
-    local host="$1"
-    local range
-    range=$(find_host_in_config "$host")
+# ~/.ssh/config has to pull the per-host files in. Mind the glob: OpenSSH uses
+# glob(3), where ** is NOT recursive — it is just two *, and * never crosses a
+# "/". So `config.d/*.conf` matches flat files, while `config.d/**/*.conf` matches
+# only files exactly one directory deep. Get this wrong and every host silently
+# disappears: ssh reports no error, it just treats the alias as a literal hostname.
+INCLUDE_LINE="Include config.d/*.conf"
 
-    if [[ "$range" == "NOT_FOUND" ]]; then
-        return 1
+ensure_include() {
+    mkdir -p "$HOSTS_DIR"
+    chmod 700 "$HOSTS_DIR"
+
+    touch "$CONFIG_FILE"
+    chmod 600 "$CONFIG_FILE"
+
+    if grep -qxF "$INCLUDE_LINE" "$CONFIG_FILE"; then
+        return 0
     fi
 
-    local start_line=${range%,*}
-    local end_line=${range#*,}
+    backup_config
+    local tmp
+    tmp="$(mktemp)"
 
-    local temp_file
-    temp_file=$(mktemp)
+    if grep -qE '^[[:space:]]*Include[[:space:]]+config\.d/' "$CONFIG_FILE"; then
+        # Upgrade an older glob (e.g. config.d/**/*.conf) in place.
+        awk -v line="$INCLUDE_LINE" \
+            '/^[[:space:]]*Include[[:space:]]+config\.d\// { print line; next } { print }' \
+            "$CONFIG_FILE" > "$tmp"
+        echo -e "${GREEN}✓ Include glob updated in ~/.ssh/config${NC}"
+    else
+        # An Include must sit before any Host block: ssh_config has no block
+        # terminators, so one placed lower is scoped to the Host block above it
+        # and is skipped for every other host.
+        { echo "$INCLUDE_LINE"; cat "$CONFIG_FILE"; } > "$tmp"
+        echo -e "${GREEN}✓ Include added to ~/.ssh/config${NC}"
+    fi
 
-    sed "${start_line},${end_line}d" "$CONFIG_FILE" > "$temp_file"
-    mv "$temp_file" "$CONFIG_FILE"
+    mv "$tmp" "$CONFIG_FILE"
+    chmod 600 "$CONFIG_FILE"
+}
 
-    sed -i.bak '/^[[:space:]]*$/N;/^[[:space:]]*\n[[:space:]]*$/D' "$CONFIG_FILE" 2>/dev/null || true
-    rm -f "$CONFIG_FILE.bak"
+# A leftover entry in ~/.ssh/config is read before the Include and wins, so it
+# would silently shadow the file this tool is about to write.
+warn_if_host_in_main_config() {
+    local host="$1"
+    grep -qE "^Host[[:space:]]+([^[:space:]]+[[:space:]]+)*${host}([[:space:]]|$)" \
+        "$CONFIG_FILE" 2>/dev/null || return 0
 
-    return 0
+    echo -e "${YELLOW}⚠ '$host' is also defined directly in ~/.ssh/config${NC}"
+    echo -e "${YELLOW}  Remove it there, or it will shadow $(host_conf_file "$host")${NC}"
 }
 
 # Handle duplicate Host
 handle_duplicate_host() {
     local host="$1"
-    local range
-    range=$(find_host_in_config "$host")
+    local conf
+    conf="$(host_conf_file "$host")"
 
-    if [[ "$range" == "NOT_FOUND" ]]; then
-        return 0
-    fi
+    [[ -f "$conf" ]] || return 0
 
-    echo -e "${YELLOW}⚠ Host alias '$host' already exists in config${NC}"
-
-    local start_line=${range%,*}
-    local end_line=${range#*,}
-    echo -e "${CYAN}Existing config (lines $start_line-$end_line):${NC}"
-    sed -n "${start_line},${end_line}p" "$CONFIG_FILE" | sed 's/^/  /'
+    echo -e "${YELLOW}⚠ Host alias '$host' already exists: $conf${NC}"
+    echo -e "${CYAN}Existing config:${NC}"
+    sed 's/^/  /' "$conf"
 
     echo ""
     echo "Choose an action:"
-    echo "  1) Overwrite - Remove existing config and use new one"
+    echo "  1) Overwrite - Replace it with the new config"
     echo "  2) Skip - Keep existing config and exit"
     echo "  3) Rename - Use a different alias"
 
@@ -299,8 +281,7 @@ handle_duplicate_host() {
         read -p "Enter option [1/2/3]: " choice
         case $choice in
             1)
-                echo -e "${BLUE}Removing existing config...${NC}"
-                remove_host_from_config "$host"
+                rm -f "$conf"
                 echo -e "${GREEN}✓ Existing config removed${NC}"
                 return 0
                 ;;
@@ -334,7 +315,7 @@ backup_config() {
     fi
 }
 
-# Add config to SSH config
+# Write the host to its own file under ~/.ssh/config.d/
 add_to_config() {
     local host="$1"
     local hostname="$2"
@@ -344,17 +325,16 @@ add_to_config() {
 
     identity_file="${identity_file/#\~/$HOME}"
 
-    backup_config
-
-    touch "$CONFIG_FILE"
-    chmod 600 "$CONFIG_FILE"
-
+    ensure_include
     ensure_agent_config
 
+    warn_if_host_in_main_config "$host"
     handle_duplicate_host "$host"
 
+    local conf
+    conf="$(host_conf_file "$host")"
+
     {
-        echo ""
         echo "Host $host"
         echo "    HostName $hostname"
         echo "    User $user"
@@ -363,9 +343,28 @@ add_to_config() {
         echo "    IdentitiesOnly yes"
         echo "    ServerAliveInterval 60"
         echo "    ServerAliveCountMax 3"
-    } >> "$CONFIG_FILE"
+    } > "$conf"
+    chmod 600 "$conf"
 
-    echo -e "${GREEN}✓ SSH config added${NC}"
+    echo -e "${GREEN}✓ SSH config written: $conf${NC}"
+}
+
+# Remove a host: one file, so nothing else can be caught in the blast.
+remove_host() {
+    local host="$1"
+    local conf
+    conf="$(host_conf_file "$host")"
+
+    if [[ ! -f "$conf" ]]; then
+        echo -e "${RED}✗ No such host: $host ($conf)${NC}"
+        if grep -qE "^Host[[:space:]]+.*${host}" "$CONFIG_FILE" 2>/dev/null; then
+            echo -e "${YELLOW}  It is defined directly in ~/.ssh/config — remove it there by hand.${NC}"
+        fi
+        return 1
+    fi
+
+    rm -f "$conf"
+    echo -e "${GREEN}✓ Removed $conf${NC}"
 }
 
 # Test config parsing with ssh -G
@@ -558,10 +557,20 @@ Arguments:
     port          SSH port (default: 22)
     identity_file Private key path (default: ~/.ssh/id_ed25519)
 
+Remove a host:
+    ssh-add-host remove myserver
+
+Where configs live:
+    Each host gets its own file at ~/.ssh/config.d/<alias>.conf, pulled in by
+    "Include config.d/*.conf" in ~/.ssh/config. One file per host means adding,
+    replacing and removing a server is a file operation rather than line surgery
+    on your whole ssh config.
+
 Features:
+    - Generates passphrase-protected keys and loads them into ssh-agent, so the
+      passphrase is typed once rather than on every connection
     - Auto-detect and handle duplicate Host aliases (overwrite/skip/rename)
     - Verify config parsing with ssh -G
-    - Auto-backup original config file
     - Auto-copy public key to server
     - Test passwordless connection
 
@@ -577,7 +586,16 @@ case "${1:-}" in
     ensure-agent-config)
         # Used by dotfiles/install.sh so the block is written by one implementation
         # only. Optional second argument: path to the canonical ssh/agent.conf.
+        ensure_include
         ensure_agent_config "${2:-}"
+        exit $?
+        ;;
+    remove|rm)
+        if [[ -z "${2:-}" ]]; then
+            echo -e "${RED}Usage: ssh-add-host remove <alias>${NC}"
+            exit 1
+        fi
+        remove_host "$2"
         exit $?
         ;;
     *)
