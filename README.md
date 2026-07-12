@@ -15,6 +15,8 @@ Personal dotfiles and scripts managed with [GNU Stow](https://www.gnu.org/softwa
 - **ssh-add-host** - Automate SSH server setup with passwordless login
   - Optional dependencies: `ssh-copy-id` (recommended) and `sshpass` for non-interactive password entry
   - Set `SSH_ADD_HOST_PASSWORD` (with `sshpass` installed) to provide the initial SSH password; otherwise enter it interactively
+  - Generated keys are **passphrase-protected**. This costs no convenience: the tool adds `AddKeysToAgent yes` (plus `UseKeychain yes` on macOS, guarded by `IgnoreUnknown` so Linux/WSL/Git Bash ignore it) to `~/.ssh/config` and loads the key into `ssh-agent`, so the passphrase is typed once, not per connection.
+  - Set `SSH_ADD_HOST_NO_PASSPHRASE=1` to generate a key with no passphrase — for CI and other unattended runs only. A passphrase-less key file *is* the credential: anyone who copies it owns the server.
 
 ## Installation
 

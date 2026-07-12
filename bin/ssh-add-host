@@ -29,6 +29,35 @@ check_dependencies() {
     fi
 }
 
+# Load a key into ssh-agent so the passphrase is typed once, not per connection.
+# macOS persists it in the Keychain; Windows' agent service persists it via DPAPI;
+# on Linux the agent holds it for the login session.
+add_key_to_agent() {
+    local key_file="$1"
+
+    # ssh-add -l: 0 = agent has keys, 1 = agent running but empty, 2 = no agent.
+    # Capture the code explicitly; `set -e` would abort on a bare nonzero exit.
+    local rc=0
+    ssh-add -l &>/dev/null || rc=$?
+
+    if [[ $rc -eq 2 ]]; then
+        echo -e "${YELLOW}⚠ No ssh-agent running — start one with: eval \$(ssh-agent)${NC}"
+        echo -e "${YELLOW}  Then run: ssh-add $key_file${NC}"
+        return 0
+    fi
+
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        ssh-add --apple-use-keychain "$key_file" 2>/dev/null \
+            || ssh-add -K "$key_file" 2>/dev/null \
+            || ssh-add "$key_file" \
+            || true
+    else
+        ssh-add "$key_file" || true
+    fi
+
+    echo -e "${GREEN}✓ Key loaded into ssh-agent${NC}"
+}
+
 # Check and generate SSH key
 check_and_generate_key() {
     local key_type="${1:-ed25519}"
@@ -43,10 +72,56 @@ check_and_generate_key() {
     read -p "Enter key comment (usually email) [$(whoami)@$(hostname)]: " key_comment
     key_comment=${key_comment:-"$(whoami)@$(hostname)"}
 
-    ssh-keygen -t "$key_type" -C "$key_comment" -f "$key_file" -N ""
+    # A passphrase encrypts the key at rest: a stolen key file is then useless
+    # on its own. It costs no convenience, because ssh-agent (configured below)
+    # asks for it once and every later connection is non-interactive.
+    # SSH_ADD_HOST_NO_PASSPHRASE=1 opts out, for CI and other unattended runs.
+    if [[ "${SSH_ADD_HOST_NO_PASSPHRASE:-}" == "1" ]]; then
+        echo -e "${YELLOW}⚠ Generating key WITHOUT a passphrase (SSH_ADD_HOST_NO_PASSPHRASE=1)${NC}"
+        ssh-keygen -t "$key_type" -C "$key_comment" -f "$key_file" -N ""
+    else
+        echo -e "${CYAN}Set a passphrase — ssh-agent will only ask for it once.${NC}"
+        ssh-keygen -t "$key_type" -C "$key_comment" -f "$key_file"
+    fi
+
+    chmod 600 "$key_file"
     echo -e "${GREEN}✓ SSH key generated: $key_file${NC}"
+
+    add_key_to_agent "$key_file"
+
     echo -e "${CYAN}Public key content:${NC}"
     cat "${key_file}.pub"
+}
+
+# Make ssh hand keys to the agent automatically, so a passphrase-protected key
+# is unlocked once instead of on every connection. Prepended as a `Host *` block:
+# ssh takes the first value it finds for a keyword, and no per-host block below
+# sets these, so there is nothing to shadow.
+#   IgnoreUnknown  -> non-macOS ssh silently skips UseKeychain instead of erroring
+#   AddKeysToAgent -> works on macOS, Linux, WSL and Git Bash
+#   UseKeychain    -> macOS only: persists the passphrase across reboots
+ensure_agent_config() {
+    touch "$CONFIG_FILE"
+    chmod 600 "$CONFIG_FILE"
+
+    if grep -q "AddKeysToAgent" "$CONFIG_FILE"; then
+        return 0
+    fi
+
+    local tmp
+    tmp="$(mktemp)"
+    {
+        echo "Host *"
+        echo "    IgnoreUnknown UseKeychain"
+        echo "    AddKeysToAgent yes"
+        echo "    UseKeychain yes"
+        echo ""
+        cat "$CONFIG_FILE"
+    } > "$tmp"
+
+    mv "$tmp" "$CONFIG_FILE"
+    chmod 600 "$CONFIG_FILE"
+    echo -e "${GREEN}✓ ssh-agent settings added to ~/.ssh/config${NC}"
 }
 
 # Find Host location in config file
@@ -199,6 +274,8 @@ add_to_config() {
 
     touch "$CONFIG_FILE"
     chmod 600 "$CONFIG_FILE"
+
+    ensure_agent_config
 
     handle_duplicate_host "$host"
 
