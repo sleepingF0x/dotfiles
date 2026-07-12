@@ -25,9 +25,11 @@ Personal dotfiles and scripts. `./install.sh` does the whole install; there is n
   ```bash
   ssh-add-host myserver ubuntu 203.0.113.10 22   # add (port defaults to 22)
   ssh-add-host remove myserver                   # remove
+  ssh-add-host split                             # migrate an existing config
   ```
 
   - Each host gets **its own file** at `~/.ssh/config.d/<alias>.conf`, pulled in by `Include config.d/*.conf` in `~/.ssh/config`. Adding, replacing and removing a server is then a file operation instead of line surgery on your whole ssh config.
+  - `split` migrates a machine whose hosts are still lumped into `~/.ssh/config`. See [Migrating an existing ssh config](#migrating-an-existing-ssh-config) — it is not a safe refactor by default, and the command is built around that.
   - Optional dependencies: `ssh-copy-id` (recommended) and `sshpass` for non-interactive password entry
   - Set `SSH_ADD_HOST_PASSWORD` (with `sshpass` installed) to provide the initial SSH password; otherwise enter it interactively
   - Generated keys are **passphrase-protected**. This costs no convenience: the tool adds `AddKeysToAgent yes` (plus `UseKeychain yes` on macOS, guarded by `IgnoreUnknown` so Linux/WSL/Git Bash ignore it) to `~/.ssh/config` and loads the key into `ssh-agent`, so the passphrase is typed once, not per connection.
@@ -86,6 +88,29 @@ Your ssh config is split in two, along the line this whole repo is organised on:
 **Host entries never go in the repo.** `HostName`, `User`, `Port` and IPs are reconnaissance data, and this repo is public.
 
 A note on the `Include` glob, because it is easy to get wrong and fails silently. OpenSSH uses `glob(3)`, where `**` is **not** recursive — it is just two `*`, and `*` never crosses a `/`. So `config.d/*.conf` matches flat files, while `config.d/**/*.conf` matches only files exactly *one directory deep*. Point it at the wrong shape and every host vanishes with no error: ssh simply treats the alias as a literal hostname.
+
+### Migrating an existing ssh config
+
+On a machine whose hosts are still lumped into `~/.ssh/config`:
+
+```bash
+ssh-add-host split
+```
+
+**Splitting is not a safe refactor by default**, which is the whole reason this is a command and not a paragraph telling you to move the blocks by hand.
+
+ssh takes the **first** value it sees for a keyword. So in a config like this, `foo` is currently using `ServerAliveInterval 60` — the `Host *` block above it wins:
+
+```sshconfig
+Host *
+    ServerAliveInterval 60
+Host foo
+    ServerAliveInterval 30    ← loses today
+```
+
+Move `foo` into `config.d/foo.conf` and the `Include` at the top of the file is read first, so `foo` now gets its own **30**. The value flipped, and **ssh reports no error** — you would find out when a connection behaves differently months later.
+
+So `split` snapshots what `ssh -G` resolves for every host, performs the move, compares all of them again, and if a single value moved it **restores the original config, deletes the files it created, and tells you which host and which keyword changed**. `Host *` pattern blocks are never moved, since their meaning is their position.
 
 `./install.sh` appends the block to the end of `~/.ssh/config`, between markers:
 
