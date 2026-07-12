@@ -8,9 +8,23 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
+YELLOW='\033[0;33m'
 NC='\033[0m'
 
 echo -e "${BLUE}Installing dotfiles...${NC}\n"
+
+# Append a source line to each shell rc, unless that path is already sourced.
+# Matching on the path (not the whole line) means an existing `source X` is
+# recognised as equivalent to `. X`, so re-running never appends a duplicate.
+ensure_sourced() {
+    local needle="$1" comment="$2" line="$3" rc
+    for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
+        [[ -f "$rc" ]] || continue
+        grep -Fq "$needle" "$rc" && continue
+        printf '\n%s\n%s\n' "$comment" "$line" >> "$rc"
+        echo -e "  ${GREEN}✓${NC} sourced in $(basename "$rc")"
+    done
+}
 
 # Link bin scripts
 if [[ -d "$SCRIPT_DIR/bin" ]]; then
@@ -54,145 +68,121 @@ if [[ -f "$SCRIPT_DIR/aliases" ]]; then
     ln -sf "$ALIASES_SOURCE" "$ALIASES_TARGET"
     echo -e "  ${GREEN}✓${NC} ~/.aliases"
 
-    # Ensure shell rc files source ~/.aliases
-    SOURCE_LINE='[ -f "$HOME/.aliases" ] && . "$HOME/.aliases"'
-    for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
-        if [[ -f "$rc" ]] && ! grep -Fq "$SOURCE_LINE" "$rc"; then
-            printf '\n# Load shared aliases from dotfiles\n%s\n' "$SOURCE_LINE" >> "$rc"
-            echo -e "  ${GREEN}✓${NC} sourced in $(basename "$rc")"
-        fi
-    done
+    ensure_sourced '$HOME/.aliases' \
+        '# Load shared aliases from dotfiles' \
+        '[ -f "$HOME/.aliases" ] && . "$HOME/.aliases"'
 fi
 
-# Ensure secrets env file exists and is sourced
+# Secrets environment
+#
+# Secret VALUES never enter this repo. Only the variable names do, via
+# secrets.env.example, so a new machine knows what it still has to fill in.
+#
+#   dotfiles/secrets.env.example  -> tracked, names only
+#   ~/.config/secrets/*.env       -> real values, chmod 600, never committed
+#   ~/.config/secrets/env.sh      -> loader, sources every *.env above
 ENV_DIR="$HOME/.config/secrets"
 ENV_TARGET="$ENV_DIR/env.sh"
-ENV_SOURCE_LINE='[ -f "$HOME/.config/secrets/env.sh" ] && . "$HOME/.config/secrets/env.sh"'
-
+ENV_EXAMPLE="$SCRIPT_DIR/secrets.env.example"
+LOADER_MARKER="dotfiles-secrets-loader"
 
 echo ""
 echo "Installing secrets env..."
 mkdir -p "$ENV_DIR"
+chmod 700 "$ENV_DIR"
 
-if [[ -f "$ENV_TARGET" ]]; then
-    echo -e "  ${GREEN}✓${NC} ~/.config/secrets/env.sh already exists"
-else
-    cat > "$ENV_TARGET" <<'EOF_ENV_SH'
-# Split secret loader.
-#
-# Keep this file as the single entrypoint sourced by your shell startup.
-# Put concrete environment variables in sibling .env files:
-#
-#   ~/.config/secrets/cli-proxy.env
-#   ~/.config/secrets/openai.env
-#   ~/.config/secrets/my-project.env
-#
-# This loader sources readable sibling *.env files in sorted order. Files must
-# use shell-compatible .env syntax, such as KEY=value or KEY="value with spaces".
-# If a later file sets the same variable to a different value, it prints a
-# warning without revealing either value; the later file still wins.
+# An env.sh without our marker is a hand-written file holding secrets inline.
+# Preserve those values before overwriting it with the loader.
+if [[ -f "$ENV_TARGET" ]] && ! grep -Fq "$LOADER_MARKER" "$ENV_TARGET"; then
+    BACKUP="$ENV_TARGET.backup-$(date +%Y%m%d%H%M%S)"
+    cp -p "$ENV_TARGET" "$BACKUP"
+    echo -e "  ${GREEN}✓${NC} backed up hand-written env.sh to $(basename "$BACKUP")"
 
-if [ -n "${ZSH_VERSION:-}" ]; then
-  _secrets_entry="${(%):-%N}"
-elif [ -n "${BASH_VERSION:-}" ]; then
-  _secrets_entry="${BASH_SOURCE[0]}"
-else
-  _secrets_entry="${HOME}/.config/secrets/env.sh"
-fi
-
-case "$_secrets_entry" in
-  /*) ;;
-  *) _secrets_entry="${PWD}/${_secrets_entry}" ;;
-esac
-
-_secrets_dir="$(cd -P "$(dirname "$_secrets_entry")" >/dev/null 2>&1 && pwd)"
-[ -n "$_secrets_dir" ] || _secrets_dir="${HOME}/.config/secrets"
-
-case "$-" in
-  *a*) _secrets_entry_allexport_was_set=1 ;;
-  *) _secrets_entry_allexport_was_set=0 ;;
-esac
-
-if [ -d "$_secrets_dir" ]; then
-  while IFS= read -r _secrets_file; do
-    _secrets_name="${_secrets_file##*/}"
-
-    case "$_secrets_name" in
-      *.backup-*|.*)
-        continue
-        ;;
-    esac
-
-    if [ -r "$_secrets_file" ]; then
-      case "$-" in
-        *a*) _secrets_allexport_was_set=1 ;;
-        *) _secrets_allexport_was_set=0 && set -a ;;
-      esac
-
-      . "$_secrets_file"
-
-      set +a
-
-      while IFS= read -r _secrets_var; do
-        [ -n "$_secrets_var" ] || continue
-        _secrets_tracking_vars="${_secrets_tracking_vars:-} _secrets_seen_${_secrets_var} _secrets_value_${_secrets_var} _secrets_file_${_secrets_var}"
-
-        eval "_secrets_var_is_set=\${$_secrets_var+x}"
-        [ "$_secrets_var_is_set" = x ] || continue
-
-        eval "_secrets_current_value=\${$_secrets_var-}"
-        eval "_secrets_var_seen=\${_secrets_seen_${_secrets_var}:-}"
-
-        if [ "$_secrets_var_seen" = 1 ]; then
-          eval "_secrets_previous_value=\${_secrets_value_${_secrets_var}-}"
-
-          if [ "$_secrets_previous_value" != "$_secrets_current_value" ]; then
-            eval "_secrets_previous_file=\${_secrets_file_${_secrets_var}:-unknown}"
-            printf 'secrets env warning: %s sets %s differently than %s; later file wins.\n' "$_secrets_name" "$_secrets_var" "$_secrets_previous_file" >&2
-          fi
-        fi
-
-        eval "_secrets_seen_${_secrets_var}=1"
-        eval "_secrets_value_${_secrets_var}=\${_secrets_current_value}"
-        eval "_secrets_file_${_secrets_var}=\${_secrets_name}"
-      done <<EOF_VARS
-$(sed -n -E 's/^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=.*/\2/p' "$_secrets_file" 2>/dev/null | sort -u)
-EOF_VARS
-
-      if [ "$_secrets_allexport_was_set" -eq 1 ]; then
-        set -a
-      else
-        set +a
-      fi
+    if [[ ! -f "$ENV_DIR/secrets.env" ]]; then
+        cp -p "$ENV_TARGET" "$ENV_DIR/secrets.env"
+        chmod 600 "$ENV_DIR/secrets.env"
+        echo -e "  ${GREEN}✓${NC} migrated its variables into secrets.env"
     fi
-  done <<EOF
-$(find "$_secrets_dir" -maxdepth 1 -type f -name "*.env" -print 2>/dev/null | sort)
-EOF
 fi
 
-set +a
-eval "unset ${_secrets_tracking_vars:-}"
-if [ "$_secrets_entry_allexport_was_set" -eq 1 ]; then
-  unset _secrets_allexport_was_set _secrets_current_value _secrets_dir _secrets_entry _secrets_entry_allexport_was_set _secrets_file _secrets_name _secrets_previous_file _secrets_previous_value _secrets_tracking_vars _secrets_var _secrets_var_is_set _secrets_var_seen
-  set -a
-else
-  unset _secrets_allexport_was_set _secrets_current_value _secrets_dir _secrets_entry _secrets_entry_allexport_was_set _secrets_file _secrets_name _secrets_previous_file _secrets_previous_value _secrets_tracking_vars _secrets_var _secrets_var_is_set _secrets_var_seen
-  set +a
-fi
+cat > "$ENV_TARGET" <<'EOF_ENV_SH'
+# dotfiles-secrets-loader v1
+#
+# Entrypoint sourced by ~/.zshrc / ~/.bashrc. Holds no secrets itself.
+# Real values live in sibling *.env files (chmod 600, never committed):
+#
+#   ~/.config/secrets/secrets.env
+#   ~/.config/secrets/some-project.env
+#
+# Variable names are tracked in dotfiles/secrets.env.example so a new machine
+# knows what to fill in. Regenerate this loader by running dotfiles/install.sh.
+
+_secrets_load() {
+  _sd="$HOME/.config/secrets"
+  [ -d "$_sd" ] || return 0
+
+  # zsh aborts on an unmatched glob; make it expand to nothing instead.
+  # bash/sh leave it literal, which the -r test below skips.
+  if [ -n "${ZSH_VERSION:-}" ]; then
+    setopt local_options null_glob
+  fi
+
+  for _f in "$_sd"/*.env; do
+    [ -r "$_f" ] || continue
+    set -a
+    . "$_f"
+    set +a
+  done
+
+  unset _sd _f
+}
+
+_secrets_load
+unset -f _secrets_load
 EOF_ENV_SH
-    echo -e "  ${GREEN}✓${NC} created ~/.config/secrets/env.sh"
+chmod 600 "$ENV_TARGET"
+echo -e "  ${GREEN}✓${NC} ~/.config/secrets/env.sh (loader)"
+
+# Fresh machine with no values yet: seed secrets.env from the tracked template.
+if [[ -f "$ENV_EXAMPLE" ]]; then
+    shopt -s nullglob
+    EXISTING_ENVS=("$ENV_DIR"/*.env)
+    shopt -u nullglob
+
+    if [[ ${#EXISTING_ENVS[@]} -eq 0 ]]; then
+        cp "$ENV_EXAMPLE" "$ENV_DIR/secrets.env"
+        chmod 600 "$ENV_DIR/secrets.env"
+        echo -e "  ${GREEN}✓${NC} created secrets.env from template"
+    fi
 fi
 
-for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
-    if [[ -f "$rc" ]]; then
-        if grep -Fq "$ENV_SOURCE_LINE" "$rc"; then
-            echo -e "  ${GREEN}✓${NC} env.sh already sourced in $(basename "$rc")"
-        else
-            printf '\n# Load secrets environment\n%s\n' "$ENV_SOURCE_LINE" >> "$rc"
-            echo -e "  ${GREEN}✓${NC} sourced env.sh in $(basename "$rc")"
-        fi
+ensure_sourced '$HOME/.config/secrets/env.sh' \
+    '# Load secrets environment' \
+    '[ -f "$HOME/.config/secrets/env.sh" ] && . "$HOME/.config/secrets/env.sh"'
+
+# Reconcile: every name in the template must resolve to a non-empty value.
+# This is what stops a new machine from silently running with missing vars.
+if [[ -f "$ENV_EXAMPLE" ]]; then
+    MISSING=$(
+        # shellcheck disable=SC1090
+        . "$ENV_TARGET" >/dev/null 2>&1
+        sed -n -E 's/^[[:space:]]*(export[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=.*/\2/p' "$ENV_EXAMPLE" \
+            | sort -u \
+            | while IFS= read -r var; do
+                  [[ -n "${!var:-}" ]] || echo "$var"
+              done
+    )
+
+    if [[ -n "$MISSING" ]]; then
+        echo ""
+        echo -e "  ${YELLOW}!${NC} These variables have no value yet — fill them in:"
+        echo "$MISSING" | sed 's/^/      /'
+        echo -e "    ${YELLOW}→${NC} edit $ENV_DIR/secrets.env, then open a new shell"
+    else
+        echo -e "  ${GREEN}✓${NC} all variables in secrets.env.example have values"
     fi
-done
+fi
 
 echo ""
 echo -e "${GREEN}Done!${NC}"
+echo -e "  ${BLUE}→${NC} open a new shell (or run: source ~/.zshrc) to pick up the changes"

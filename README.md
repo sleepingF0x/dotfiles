@@ -8,6 +8,7 @@ Personal dotfiles and scripts managed with [GNU Stow](https://www.gnu.org/softwa
 |-----------|----------|-----------------|
 | `bin/` | Custom shell scripts | `~/.local/bin/` |
 | `aliases` | Shared shell aliases | `~/.aliases` |
+| `secrets.env.example` | Secret variable names (no values) | `~/.config/secrets/secrets.env` |
 
 ### Scripts
 
@@ -71,20 +72,28 @@ The installer also appends this source line to `~/.zshrc` and `~/.bashrc` if mis
 
 ### Secrets Environment
 
-The installer creates `~/.config/secrets/env.sh` if it does not already exist, then appends this source line to `~/.zshrc` and `~/.bashrc` if missing:
+Secret **values** never enter this repo. Only their **names** do, via `secrets.env.example`, so a new machine knows what it still has to fill in.
 
-```sh
-[ -f "$HOME/.config/secrets/env.sh" ] && . "$HOME/.config/secrets/env.sh"
+| Location | Contents | Tracked? |
+|----------|----------|----------|
+| `secrets.env.example` | Variable names, empty values | Yes |
+| `~/.config/secrets/*.env` | Real values, `chmod 600` | No |
+| `~/.config/secrets/env.sh` | Loader — sources every `*.env` above | No (generated) |
+
+`./install.sh` wires this up: it writes the loader, adds the source line to `~/.zshrc` / `~/.bashrc`, and on a fresh machine seeds `~/.config/secrets/secrets.env` from the template. It then checks every name in the template against what actually loaded, and lists any that are still empty:
+
+```
+! These variables have no value yet — fill them in:
+    JINA_API_KEY
+    TWITTER_TOKEN
+  → edit ~/.config/secrets/secrets.env, then open a new shell
 ```
 
-`env.sh` loads readable sibling `*.env` files in sorted order and automatically exports their variables. Keep each file shell-compatible:
+**Adding a variable:** append its name to `secrets.env.example` with an empty value and commit. Every other machine's next `./install.sh` run flags it as missing.
 
-```sh
-OPENAI_API_KEY=...
-PROJECT_NAME="value with spaces"
-```
+**Splitting by project:** the loader sources *every* `*.env` in the directory, so you can keep `jina.env`, `twitter.env`, etc. side by side instead of one `secrets.env`.
 
-If a later `.env` file sets the same variable to a different value, `env.sh` prints a warning with the variable name and file names, without printing either secret value. The later file still wins.
+An older hand-written `env.sh` holding secrets inline is detected on upgrade: the installer backs it up and migrates its variables into `secrets.env` before replacing it with the loader.
 
 ### Adding New Config Categories
 
@@ -100,6 +109,7 @@ stow zsh -t ~
 ```
 dotfiles/
 ├── aliases                 # Shared shell aliases
+├── secrets.env.example     # Secret variable NAMES (no values)
 ├── bin/                    # Executable scripts
 │   └── ssh-add-host
 ├── install.sh              # Installer for scripts, aliases, and secrets env
