@@ -36,8 +36,9 @@ ssh/**
 .claude/settings.local.json
 .claude/
 
-# Tests stay local
-tests/
+# Tests stay local unless explicitly reviewed for this public repo
+tests/*
+!tests/install-secrets.sh
 
 # Backup files (a backup of a secret is still a secret)
 *.bak

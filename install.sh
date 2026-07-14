@@ -97,23 +97,43 @@ ENV_TARGET="$ENV_DIR/env.sh"
 ENV_EXAMPLE="$SCRIPT_DIR/secrets.env.example"
 LOADER_MARKER="dotfiles-secrets-loader"
 
+is_legacy_secrets_loader() {
+    local file="$1"
+    grep -Fq '# Split secret loader.' "$file" &&
+        grep -Fq 'This loader sources readable sibling *.env files in sorted order.' "$file"
+}
+
 echo ""
 echo "Installing secrets env..."
 mkdir -p "$ENV_DIR"
 chmod 700 "$ENV_DIR"
 
-# An env.sh without our marker is a hand-written file holding secrets inline.
-# Preserve those values before overwriting it with the loader.
+# An env.sh without our marker is either the legacy generated loader or a
+# hand-written file holding secrets inline. Only the latter contains values
+# that belong in secrets.env.
 if [[ -f "$ENV_TARGET" ]] && ! grep -Fq "$LOADER_MARKER" "$ENV_TARGET"; then
     BACKUP="$ENV_TARGET.backup-$(date +%Y%m%d%H%M%S)"
     cp -p "$ENV_TARGET" "$BACKUP"
-    echo -e "  ${GREEN}✓${NC} backed up hand-written env.sh to $(basename "$BACKUP")"
 
-    if [[ ! -f "$ENV_DIR/secrets.env" ]]; then
+    if is_legacy_secrets_loader "$ENV_TARGET"; then
+        echo -e "  ${GREEN}✓${NC} backed up legacy env.sh to $(basename "$BACKUP")"
+    elif [[ ! -f "$ENV_DIR/secrets.env" ]]; then
+        echo -e "  ${GREEN}✓${NC} backed up hand-written env.sh to $(basename "$BACKUP")"
         cp -p "$ENV_TARGET" "$ENV_DIR/secrets.env"
         chmod 600 "$ENV_DIR/secrets.env"
         echo -e "  ${GREEN}✓${NC} migrated its variables into secrets.env"
+    else
+        echo -e "  ${GREEN}✓${NC} backed up hand-written env.sh to $(basename "$BACKUP")"
     fi
+fi
+
+# The first split-loader migration could mistake the legacy generated env.sh
+# for secret data. That file then sourced itself through the *.env glob until
+# zsh hit its recursion limit. Quarantine the known loader; never delete it.
+if [[ -f "$ENV_DIR/secrets.env" ]] && is_legacy_secrets_loader "$ENV_DIR/secrets.env"; then
+    LEGACY_BACKUP="$ENV_DIR/secrets.env.legacy-loader-backup-$(date +%Y%m%d%H%M%S)"
+    mv "$ENV_DIR/secrets.env" "$LEGACY_BACKUP"
+    echo -e "  ${GREEN}✓${NC} quarantined recursive secrets.env as $(basename "$LEGACY_BACKUP")"
 fi
 
 cat > "$ENV_TARGET" <<'EOF_ENV_SH'
